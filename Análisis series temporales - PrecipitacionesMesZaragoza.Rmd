@@ -1,0 +1,288 @@
+---
+title: "EJERCICIO DE EVALUACIÓN, ANÁLISIS Y PREDICCIÓN DE SERIES TEMPORALES"
+description: |
+  PRECIPITACIONES POR MES (MM) EN ZARAGOZA. 
+author:
+  - name: Jonás Jiménez Gil
+    affiliation: Universidad Complutense de Madrid
+    affiliation_url: 
+date: "`r Sys.Date()`"
+output:
+    distill::distill_article:
+        highlight: kate
+        colorlinks: true
+        code_folding: false
+        toc: true            
+        toc_depth: 3 
+---
+
+```{r setup, include = FALSE}
+# Ajuste comunes de los chunk
+knitr::opts_chunk$set(fig.width = 9, fig.asp = 1, out.width = "100%",
+                      message = FALSE, warning = FALSE,
+                      echo = TRUE, res = 400)
+
+```
+
+# Introducción: Presentación de la serie a analizar
+Para la realización de este ejercicio práctico se ha escogido una serie
+temporal que tiene un comportamiento estacional y que nos muestra las 
+precipitaciones por mes (en mm) en Zaragoza desde el 2000 hasta el
+año 2021 con valores mensuales.
+Los datos se han obtenido desde la página web del IAEST (Instituto
+Aragonés de Estadística)
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(ggfortify)
+library(zoo)
+library(forecast)
+library(tseries)
+```
+
+
+# Representación gráfica y descomposición estacional
+
+## Representación gráfica
+
+```{r}
+# Leemos el excel donde tenemos nuestra tabla de precipitaciones/mes
+Precipitaciones_df <- read_xlsx(path = "./PrecipitacionesMesZaragoza.xlsx")
+```
+
+```{r eval=TRUE}
+Precipitaciones <- ts(Precipitaciones_df[,-1], start = c(2008,1), frequency = 12)
+autoplot(Precipitaciones, ts.colour = 'blue') + ggtitle("Precipitaciones mes Zaragoza") + xlab ("mes") + ylab("Precipitaciones (mm)")
+
+```
+- **¿La serie es estacionaria?** Si, porque tiene media más o menos constante.
+- **¿Tiene tendencia?** No se observa una tendencia evidente en la gráfica
+- **¿Tiene comportamiento estacional?** Si 
+- **¿Cuál es el periodo?** 12
+
+Podemos observar como los valores con una pluviometría mayor suelen coincidir
+con los meses de otoño y primavera y como los meses más secos suelen coincidir
+con los meses de verano, esto es algo que se va repitiendo a lo largo
+de todos los años.
+
+## Descomposición estacional
+
+```{r eval=TRUE}
+#Realizamos la descomposición estacional según el método multiplicativo
+Precipitaciones_Comp <- decompose(Precipitaciones, type = c("multiplicative"))
+#Lo representamos gráficamente
+autoplot(Precipitaciones_Comp, ts.colour = "blue")
+
+```
+Podemos visualizar que del 2009 al 2021 hay una tendencia creciente
+en el total de precipitaciones.
+
+```{r eval=TRUE}
+#Mostramos los coeficientes de estacionalidad en una tabla
+knitr::kable(Precipitaciones_Comp$figure, digits =2,caption = "Coef Estacionalidad")
+```
+Observamos por ejemplo como febrero y septiembre tienen un 72 y 46%
+más precipitaciones que la media, mientras que enero es el més más seco
+con únicamente el 44% respecto a la media. Resulta sorprendente que los 
+meses de julio y agosto son considerablemente más lluviosos que noviembre
+y diciembre
+
+
+```{r eval=TRUE}
+#Calculamos la gráfica con los datos estacionalmente ajustados y la tendencia
+autoplot(Precipitaciones, series="Datos") +
+autolayer(trendcycle(Precipitaciones_Comp), series="Tendencia")+
+autolayer(seasadj(Precipitaciones_Comp), series="Estacionalmente ajustada")+
+xlab("Year") + ylab("Precipitaciones") +
+ggtitle("Serie de Precipitaciones") +
+scale_colour_manual(values=c("gray","blue","red"),
+                    breaks=c("Datos","Estacionalmente ajustada","Tendencia"))
+```
+Confirmamos que la tendencia es creciente desde alrededor el año 2009 al 2021
+
+```{r eval=TRUE}
+#También podemos representar gráficamente los valores separados por años
+ggseasonplot(Precipitaciones, year.labels = TRUE, year.labels.left = TRUE, col=rainbow(13))
+
+```
+
+
+# Búsqueda de modelo de suavizado exponencial más adecuado
+
+```{r eval=TRUE}
+#Creamos un modelo train con todos los datos hasta el último año y un modelo test con solamente los datos del último año
+Precipitaciones_train <- window(Precipitaciones, end=c(2021,1))
+Precipitaciones_test <- window(Precipitaciones, start=c(2021,1))
+
+```
+
+Primero vamos a probar con los métodos de Holt, eliminaremos el método de 
+alisado simple ya que la serie tiene una tendencia creciente y este 
+método solamente nos sirve cuando la serie no tiene tendencia ni
+creciente ni decreciente
+
+```{r eval=TRUE}
+#Representamos la serie original y la suavizada con las predicciones con el método de Holt
+Predicciones_sh <- holt(Precipitaciones_train, h=12)
+autoplot(Predicciones_sh) + autolayer(fitted(Predicciones_sh), series="Fitted") +ylab("Precipitaciones mm)") +
+xlab("mes")
+
+knitr::kable(Predicciones_sh$model$par, digits = 4, caption = "Parámetros Holt")
+
+#Representamos la serie original y la suavizada con las predicciones con el método de Holt amortiguado (Damped)
+Predicciones_shd <- holt(Precipitaciones_train, damped = TRUE, h=12)
+autoplot(Predicciones_shd) +autolayer(fitted(Predicciones_shd), series="Fitted") +
+ylab("Precipitaciones mm)") + xlab("mes")
+
+knitr::kable(Predicciones_sh$model$par, digits = 4, caption = "Parámetros Damped Holt")
+```
+
+
+Ahora vamos a realizar el método de suavizado para series con estacionalidad:
+el método Holt-Winters.
+
+```{r eval=TRUE}
+#Calculamos las predicciones utilizando el método Holt-Winters para los próximos 12 meses
+Predicciones_shw <- hw(Precipitaciones_train, h=12, seasonal="multiplicative",
+                      level = c(80,95))
+#Representamos la predición en una gráfica 
+autoplot(Predicciones_shw)
+
+#Representamos la serie original y la suavizada con las predicciones con el método de Holt-Winters
+autoplot(Predicciones_shw)+autolayer(fitted(Predicciones_shw), series="Fitted") +
+ylab("Precipitaciones mm)") + xlab("mes")
+```
+
+```{r eval=TRUE}
+#Visualizamos las prediciones mostrándolas en una tabla
+print(Predicciones_shw)
+
+#Visualizamos los parámetros del modelo ajustado
+knitr::kable(Predicciones_shw$model$par, format = "pipe", digits = 4, caption = "Estimadores de los parámetros Holt-Winters")
+```
+
+Se considera que este método (Holt-Winters) es el más adecuado para nuestra serie,
+tanto porque se adapta para series con estacionalidad como por sus resultados.
+
+# Representar la serie y sus resultados
+
+```{r eval=TRUE}
+#Representamos primero las autocorrelaciones simples hasta el retardo 48
+ggAcf(Precipitaciones_train, lag=48)
+
+corr <- Acf(Precipitaciones_train, lag=48)
+print(corr)
+
+```
+Observamos en el autocorrelograma simple un comportamiento repetitivo de 
+las autocorrelaciones cada 12 meses, se observa como la autocorrelación 
+más fuerte es en los retardos múltiplos de 12, siendo la más fuerte la
+de orden 24 con un valor de 0.212. Esto se debe a que las
+autocorrelaciones simples tienen un efecto acumulativo de retardos anteriores.
+Solo se observa una autocorrelación fuera de las bandas de confianza.
+
+```{r eval=TRUE}
+#Representamos también las autocorrelaciones parciales hasta el retardo 48
+ggPacf(Precipitaciones_train, lag=48)
+
+corrP <- Acf(Precipitaciones_train, lag=48)
+print(corrP)
+
+```
+
+Observamos lo mismo que en las autocorrelaciones simples, la que tiene
+un valor superior es la autocorrelación 24.
+
+Al ser una serie claramente estacional, con la siguiente sintaxis visualizamos
+la gráfica de la serie y los autocorrelogramas generando una diferenciación
+de orden estacional
+
+```{r eval=TRUE}
+autoplot(diff(Precipitaciones_train,12)) + ggtitle("Precipitaciones Zaragoza") + 
+  xlab("mes") + ylab("Total Precipitaciones")
+
+```
+
+```{r eval=TRUE}
+#Volvemos a representamos las autocorrelaciones simples hasta el retardo 48 de la serie diferenciada
+ggAcf(diff(Precipitaciones_train,12), lag=48)
+
+#Probamos a repetir este proceso con la autocorrelación parcial
+ggPacf(diff(Precipitaciones_train,12), lag=48)
+
+```
+
+Observamos que justamente es la autocorrelación 12 de la que depende la 
+serie, aunque la autocorrelación de orden 3 también está justo en el límite.
+Ajustaremos el modelo ARIMA con estos datos obtenidos.
+
+```{r eval=TRUE}
+#Realizamos la prueba de Dickey-Fuller para comprobar si nuestra serie es estacionaria otra vez
+seriedif <- diff(Precipitaciones_train,12)
+adf.test(seriedif)
+
+#el p-valor es <0,05 luego la serie es estacionaria.
+
+```
+
+Vamos a ajustar el modelo Arima con los resultados obtenidos en las gráficas
+anteriores. El modelo ARIMA que vamos a probar es (1,1,0)(0,1,1)[12]
+
+```{r eval=TRUE}
+fitPrecipitaciones1 <- Arima((Precipitaciones_train), c(1,1,0), seasonal=c(0,1,1))
+checkresiduals(fitPrecipitaciones1)
+```
+Con el Ljung-Box test observamos que el pvalor es mucho menor de 0.05
+luego rechazamos que los residuos estén incorrelados, lo que implica que
+el modelo no explica toda la dependencia de la serie
+
+Vamos a probar ahora con la función autoArima
+
+```{r eval=TRUE}
+fitPrecipitaciones2 <- auto.arima(Precipitaciones_train)
+checkresiduals(fitPrecipitaciones2)
+
+```
+Observamos que el p valor es mayor a 0.05 luego cogemos como bueno este 
+modelo Arima (0,0,0)(2,0,2)[12], en este modelo Arima se acepta la 
+hipótesis de que los residuos estén incorrelados.
+
+# Calcular las predicciones y los intérvalos de confianza para las unidades de tiempo que se considere oportuno, dependiendo de la serie, siguientes al último valor observado
+
+```{r eval=TRUE}
+#Representamos graficamente estas predicciones
+autoplot(forecast(fitPrecipitaciones2, h=12))
+
+#Mostramos los valores de las predicciones
+knitr::kable(forecast(fitPrecipitaciones2, h=12), digits = 4, caption = "Predicciones")
+
+```
+
+# Comparación de las predicciones obtenidas con cada uno de los métodos (suavizado y ARIMA) con los valores observados reservados previamente
+
+```{r eval=TRUE}
+#Representamos todas las series juntas para poder compararlas
+autoplot(Precipitaciones) + 
+  autolayer(Precipitaciones_test, series="Test") + 
+  autolayer(forecast(fitPrecipitaciones2, h=12), series="Predicciones", PI=FALSE) + 
+  autolayer(Predicciones_shw, series = "Suavizado HW", PI=FALSE) + ylab("Precipitaciones mm") + xlab("mes") + 
+  ggtitle("Serie de Precipitaciones") + guides(colour = guide_legend(title = "Forecast"))
+
+```
+
+Realizamos un zoom para centrarnos en la zona de predicción
+
+```{r eval=TRUE}
+autoplot(Precipitaciones_test, series="Test") + 
+  autolayer(forecast(fitPrecipitaciones2, h=12), series="Predicciones", PI=FALSE) + 
+  autolayer(Predicciones_shw, series = "Suavizado HW", PI=FALSE) + ylab("Precipitaciones mm") + xlab("mes") + 
+  ggtitle("Serie de Precipitaciones") + guides(colour = guide_legend(title = "Forecast"))
+
+```
+
+Observamos que las tres gráficas tienen unos valores similares siendo
+la predicción conseguida con el suavizado de HW más similar a los datos
+reales ya que respeta más los valores más altos y más bajos de la gráfica
+mientras que nuestra predicción generada con el modelo ARIMA nos genera 
+una gráfica mucho más suavizada con valores más intermedios.
